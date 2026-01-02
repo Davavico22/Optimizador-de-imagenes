@@ -1,33 +1,21 @@
-# 📂 Manual de Gestión Web y Kit de Optimización de Imágenes
+# 📸 ImageProcessor Toolset
 
-Este documento centraliza las instrucciones para la clonación de sitios web, configuración de Git y el uso de herramientas de automatización para imágenes.
+Este repositorio contiene una colección de scripts en Python diseñados para automatizar la gestión, optimización y edición masiva de imágenes. Ideal para flujos de trabajo de desarrollo web (WordPress, sitios estáticos) y organización de catálogos fotográficos.
 
----
+## 🚀 Contenido del Kit
 
-## 1. 🌐 Duplicación de Sitio Web (Manual)
+El kit se compone de 4 herramientas principales:
 
-Basado en la estructura de archivos de tu servidor (DirectAdmin/cPanel):
-
-1.  **Copia de Archivos:** Descarga o copia la carpeta `public_html`. Es el núcleo que contiene WordPress.
-2.  **Base de Datos:** Accede a **phpMyAdmin**, selecciona la base de datos de la web original y usa la función **Exportar**.
-3.  **Despliegue:**
-    * Sube los archivos al nuevo dominio/directorio.
-    * Crea una nueva base de datos e **Importa** el archivo `.sql`.
-    * Edita el archivo `wp-config.php` con los nuevos datos de conexión (`DB_NAME`, `DB_USER`, `DB_PASSWORD`).
-4.  **Actualización de URLs:** Si el dominio ha cambiado, usa un script de "Search and Replace" para actualizar las rutas en la base de datos.
+1.  **Optimización WebP (Conversión Simple):** Convierte imágenes JPG/PNG a WebP con parámetros avanzados de compresión.
+2.  **Optimización WebP Pro (Recursiva + Reemplazo):** Navega por subdirectorios, convierte imágenes y elimina los originales para ahorrar espacio.
+3.  **Watermarking (Texto en Imagen):** Añade marcas de agua o texto dinámico en la parte inferior de las imágenes.
+4.  **Renombrado Masivo:** Renombra archivos en serie con prefijos personalizados y numeración secuencial.
 
 ---
 
-## 2. 🛠️ Configuración de Git (`.gitignore`)
+## 🛠️ Requisitos Previos
 
-Para evitar subir archivos innecesarios o sensibles al repositorio, crea un archivo `.gitignore` en la raíz:
-
-```text
-# Archivos sensibles y temporales
-wp-config.php
-.htaccess
-*.log
-.trash/
-
-# Contenido multimedia pesado
-wp-content/uploads/
+### 1. Dependencias de Python
+Necesitas tener instalado Python 3.x y la librería **Pillow** para el script de texto:
+```bash
+pip install Pillow
