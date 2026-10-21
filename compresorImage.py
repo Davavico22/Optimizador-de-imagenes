@@ -1,113 +1,169 @@
+
 import os
 import subprocess
-from glob import glob
+import tempfile
+from pathlib import Path
+from PIL import Image, ImageOps
 
-# --- CONFIGURACIÓN AVANZADA (Basada en la interfaz de Squoosh/cwebp) ---
-CARPETA_ENTRADA = "imagenes_originales"
-CARPETA_SALIDA = "imagenes_webp"
-RUTINA_CWEBP = "libwebp-1.6.0-windows-x64/bin/cwebp.exe" # Asegúrese de que 'cwebp' esté en su PATH o ponga la ruta completa
+# ============== CONFIGURACIÓN ==============
 
-# Parámetros avanzados de cwebp:
-# Nota: La sintaxis de cwebp es "-[parametro] [valor]"
+CARPETA_ENTRADA = Path("imagenes_originales")
+CARPETA_SALIDA = Path("imagenes_webp")
 
-# 1. Compresión (Calidad/Lossless)
-#    -q 85: Calidad (0-100, para compresión Lossy). Omita esto si usa lossless=True.
-#    -lossless: Activa la compresión sin pérdida. Usar solo UNO de estos dos.
-PARAM_COMPRESION = "-q" 
-VALUE_COMPRESION = "85" 
+RUTINA_CWEBP = "libwebp-1.6.0-windows-x64/bin/cwebp.exe"
 
-# 2. Esfuerzo / Preset / Método de compresión (Effort)
-#    -m 6: Nivel de método de compresión (0=rápido, 6=lento, máxima compresión).
-PARAM_ESFUERZO = "-m" 
-VALUE_ESFUERZO = "6"
+# Límite de tamaño: 1 MB decimal
+PESO_MAXIMO = 1_000_000
 
-# 3. Parametros de Filtrado
-#    -f 60: Fuerza del filtro (Filter strength 0-100).
-#    -sharpness 0: Nitidez del filtro (Filter sharpness 0-7).
-PARAM_FILTRO = "-f" 
-VALUE_FILTRO = "60"
-VALUE_SHARPNESS = "0"
+# Resolución máxima inicial
+ANCHO_MAXIMO = 1920
+ALTO_MAXIMO = 1920
 
-# 4. Multiprocesamiento (Passes)
-#    -pass 1: Número de pasadas/repeticiones para optimizar.
-PARAM_PASADAS = "-pass" 
-VALUE_PASADAS = "1"
+# Calidades a probar, de mayor a menor
+CALIDADES = [85, 80, 75, 70, 65, 60, 55]
 
-# 5. Conversion Alpha (Para PNGs con transparencia)
-#    -alpha_filter 'best': Similar a 'Alpha to quality' en Squoosh.
-PARAM_ALPHA = "-alpha_filter" 
-VALUE_ALPHA = "best"
+# Reducciones de resolución si sigue pesando demasiado
+FACTORES_ESCALA = [1.0, 0.85, 0.70, 0.55, 0.40, 0.25]
 
-# -------------------------------------------------------------------------
+EXTENSIONES = {".jpg", ".jpeg", ".png"}
 
-def ejecutar_cwebp(ruta_entrada, ruta_salida_webp):
-    """Ejecuta el comando cwebp con los parámetros definidos."""
-    
-    # 1. Crear la cadena de comandos
-    # Se añade '-quiet' para que cwebp no imprima información por cada archivo
+# ===========================================
+
+
+def peso_mb(ruta):
+    return os.path.getsize(ruta) / 1_000_000
+
+
+def convertir_webp(entrada, salida, calidad):
     comando = [
         RUTINA_CWEBP,
-        PARAM_COMPRESION,
-        VALUE_COMPRESION,
-        PARAM_ESFUERZO,
-        VALUE_ESFUERZO,
-        PARAM_FILTRO,
-        VALUE_FILTRO,
-        VALUE_SHARPNESS,
-        PARAM_PASADAS,
-        VALUE_PASADAS,
-        PARAM_ALPHA,
-        VALUE_ALPHA,
-        ruta_entrada, 
-        "-o", ruta_salida_webp,
-        # "-quiet"
+        "-q", str(calidad),
+        "-m", "6",
+        "-af",
+        "-mt",
+        "-alpha_filter", "best",
+        "-quiet",
+        str(entrada),
+        "-o", str(salida)
     ]
-    
-    # 2. Ejecutar
+
+    resultado = subprocess.run(
+        comando,
+        capture_output=True,
+        text=True
+    )
+
+    if resultado.returncode != 0:
+        raise RuntimeError(resultado.stderr.strip())
+
+
+def optimizar_imagen(ruta_entrada, ruta_salida):
+    peso_original = peso_mb(ruta_entrada)
+
     try:
-        # La función subprocess.run ejecuta el comando
-        resultado = subprocess.run(
-            comando, 
-            check=True,  # Lanza un error si cwebp falla
-            capture_output=True, 
-            text=True
+        with Image.open(ruta_entrada) as original:
+            imagen = ImageOps.exif_transpose(original)
+
+            # Preservar transparencia cuando exista
+            if imagen.mode in ("RGBA", "LA") or (
+                imagen.mode == "P" and "transparency" in imagen.info
+            ):
+                imagen = imagen.convert("RGBA")
+            else:
+                imagen = imagen.convert("RGB")
+
+            # Limitar la resolución inicial
+            imagen.thumbnail(
+                (ANCHO_MAXIMO, ALTO_MAXIMO),
+                Image.Resampling.LANCZOS
+            )
+
+            base = imagen.copy()
+
+        with tempfile.TemporaryDirectory() as temporal:
+            temporal = Path(temporal)
+            ruta_temporal = temporal / "temporal.png"
+
+            for factor in FACTORES_ESCALA:
+                ancho = max(1, int(base.width * factor))
+                alto = max(1, int(base.height * factor))
+
+                reducida = base.resize(
+                    (ancho, alto),
+                    Image.Resampling.LANCZOS
+                )
+
+                reducida.save(ruta_temporal, format="PNG")
+
+                for calidad in CALIDADES:
+                    convertir_webp(
+                        ruta_temporal,
+                        ruta_salida,
+                        calidad
+                    )
+
+                    peso_final = os.path.getsize(ruta_salida)
+
+                    if peso_final < PESO_MAXIMO:
+                        reduccion = (
+                            1 - peso_final /
+                            os.path.getsize(ruta_entrada)
+                        ) * 100
+
+                        print(
+                            f"✅ {ruta_entrada.name}\n"
+                            f"   Original: {peso_original:.2f} MB\n"
+                            f"   WebP: {peso_mb(ruta_salida):.2f} MB\n"
+                            f"   Resolución: {ancho}x{alto}\n"
+                            f"   Calidad: {calidad}\n"
+                            f"   Reducción: {reduccion:.1f}%\n"
+                        )
+                        return True
+
+        # No se ha conseguido el peso objetivo
+        if ruta_salida.exists():
+            ruta_salida.unlink()
+
+        print(
+            f"⚠️ No se consiguió bajar de 1 MB: "
+            f"{ruta_entrada.name}"
         )
-        print(f"✔️ Procesada: {os.path.basename(ruta_entrada)}")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"❌ ERROR en cwebp para {os.path.basename(ruta_entrada)}:")
-        print(f"   Salida de error: {e.stderr.strip()}")
-    except FileNotFoundError:
-        print(f"❌ ERROR: El comando '{RUTINA_CWEBP}' no fue encontrado.")
-        print("Asegúrese de instalar 'cwebp' y de que esté en su PATH.")
+        return False
+
+    except Exception as e:
+        if ruta_salida.exists():
+            ruta_salida.unlink()
+
+        print(f"❌ Error en {ruta_entrada.name}: {e}")
+        return False
 
 
 def procesar_carpeta():
-    """Recorre la carpeta de entrada y convierte cada imagen compatible."""
-    
-    if not os.path.exists(CARPETA_SALIDA):
-        os.makedirs(CARPETA_SALIDA)
-        print(f"Creada carpeta de salida: '{CARPETA_SALIDA}'")
-        
-    if not os.path.exists(CARPETA_ENTRADA):
-        print(f"❌ ERROR: La carpeta de entrada '{CARPETA_ENTRADA}' no existe.")
+    if not CARPETA_ENTRADA.exists():
+        print("❌ No existe la carpeta de entrada.")
         return
 
-    print(f"Iniciando conversión avanzada a WebP en '{CARPETA_ENTRADA}'...")
-    
-    # Busca todos los archivos compatibles
-    extensiones_compatibles = ['*.jpg', '*.jpeg', '*.png']
-    
-    for ext in extensiones_compatibles:
-        for ruta_entrada in glob(os.path.join(CARPETA_ENTRADA, ext)):
-            
-            # Generar el nombre de salida .webp
-            nombre_base = os.path.splitext(os.path.basename(ruta_entrada))[0]
-            ruta_salida_webp = os.path.join(CARPETA_SALIDA, f"{nombre_base}.webp")
-            
-            ejecutar_cwebp(ruta_entrada, ruta_salida_webp)
-            
-    print("\n✅ Proceso de conversión avanzada a WebP completado.")
+    CARPETA_SALIDA.mkdir(parents=True, exist_ok=True)
+
+    imagenes = sorted(
+        ruta for ruta in CARPETA_ENTRADA.iterdir()
+        if ruta.is_file()
+        and ruta.suffix.lower() in EXTENSIONES
+    )
+
+    correctas = 0
+
+    for ruta in imagenes:
+        salida = CARPETA_SALIDA / (ruta.stem + ".webp")
+
+        if optimizar_imagen(ruta, salida):
+            correctas += 1
+
+    print("\n====== RESUMEN ======")
+    print(f"Imágenes encontradas: {len(imagenes)}")
+    print(f"Optimizadas: {correctas}")
+    print(f"Fallidas: {len(imagenes) - correctas}")
+
 
 if __name__ == "__main__":
     procesar_carpeta()
